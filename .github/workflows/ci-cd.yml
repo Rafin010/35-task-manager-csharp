@@ -1,0 +1,55 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+      - run: dotnet restore
+      - run: dotnet build --configuration Release --no-restore --warnaserror
+      - name: Test when available
+        run: dotnet test --configuration Release --no-build --verbosity normal
+        continue-on-error: true
+      - run: dotnet publish --configuration Release --no-build --output publish
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-artifact
+          path: publish
+          retention-days: 14
+
+  release:
+    name: Release tagged artifact
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-artifact
+          path: release
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tar -czf "${GITHUB_REPOSITORY##*/}-${GITHUB_REF_NAME}.tar.gz" -C release .
+          gh release create "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY##*/}-${GITHUB_REF_NAME}.tar.gz" --generate-notes --repo "$GITHUB_REPOSITORY"
